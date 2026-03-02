@@ -18,6 +18,14 @@ struct BoardDetailView: View {
         .navigationTitle(board.title)
         .toolbar {
             ToolbarItem {
+                Button {
+                    addCardAtViewportCenter()
+                } label: {
+                    Label("Add Card", systemImage: "plus")
+                }
+            }
+
+            ToolbarItem {
                 Button("Manage") {
                     isShowingManageSheet = true
                 }
@@ -55,6 +63,22 @@ struct BoardDetailView: View {
         modelContext.insert(card)
         board.updatedAt = .now
         modelContext.saveWithLogging("BoardDetailView.addCard")
+    }
+
+    private func addCardAtViewportCenter() {
+        let scale = max(0.5, board.viewportScale)
+        let centerX = -board.viewportOffsetX / scale
+        let centerY = -board.viewportOffsetY / scale
+
+        let card = Card(
+            board: board,
+            title: "Card \(board.cards.count + 1)",
+            x: centerX,
+            y: centerY
+        )
+        modelContext.insert(card)
+        board.updatedAt = .now
+        modelContext.saveWithLogging("BoardDetailView.addCardAtViewportCenter")
     }
 
     private func deleteCards(offsets: IndexSet) {

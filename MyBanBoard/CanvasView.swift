@@ -150,18 +150,16 @@ private struct CanvasCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(card.title)
+            TextField("Title", text: $card.title)
                 .font(.headline)
-                .lineLimit(1)
+                .textFieldStyle(.plain)
+                .onSubmit(onCommit)
 
-            if !card.content.isEmpty {
-                Text(card.content)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
-            }
-
-            Spacer(minLength: 0)
+            TextEditor(text: $card.content)
+                .font(.subheadline)
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
+                .frame(maxHeight: .infinity)
         }
         .padding(12)
         .frame(width: effectiveWidth, height: effectiveHeight, alignment: .topLeading)
@@ -176,6 +174,8 @@ private struct CanvasCardView: View {
         .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
         .offset(dragTranslation)
         .gesture(moveGesture)
+        .onChange(of: card.title) { onCommit() }
+        .onChange(of: card.content) { onCommit() }
     }
 
     private var effectiveWidth: CGFloat {

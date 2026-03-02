@@ -11,6 +11,7 @@ import SwiftData
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Board.updatedAt, order: .reverse) private var boards: [Board]
+    @State private var isShowingDebug = false
 
     var body: some View {
         NavigationSplitView {
@@ -25,6 +26,15 @@ struct ContentView: View {
                 .onDelete(perform: deleteBoards)
             }
             .navigationTitle("Boards")
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Boards")
+                        .font(.headline)
+                        .onTapGesture(count: 5) {
+                            isShowingDebug = true
+                        }
+                }
+            }
 #if os(macOS)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
 #endif
@@ -33,6 +43,11 @@ struct ContentView: View {
                     Button(action: addBoard) {
                         Label("Add Board", systemImage: "plus")
                     }
+                }
+            }
+            .sheet(isPresented: $isShowingDebug) {
+                NavigationStack {
+                    DebugView()
                 }
             }
         } detail: {

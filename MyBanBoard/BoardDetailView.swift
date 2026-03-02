@@ -9,19 +9,45 @@ import SwiftUI
 import SwiftData
 
 struct BoardDetailView: View {
+    private enum SurfaceMode: String, CaseIterable, Identifiable {
+        case canvas = "Canvas"
+        case kanban = "Kanban"
+
+        var id: String { rawValue }
+    }
+
     @Environment(\.modelContext) private var modelContext
     @Bindable var board: Board
     @State private var isShowingManageSheet = false
+    @State private var surfaceMode: SurfaceMode = .canvas
 
     var body: some View {
-        CanvasView(board: board)
+        Group {
+            if surfaceMode == .canvas {
+                CanvasView(board: board)
+            } else {
+                KanbanView(board: board)
+            }
+        }
         .navigationTitle(board.title)
         .toolbar {
             ToolbarItem {
-                Button {
-                    addCardAtViewportCenter()
-                } label: {
-                    Label("Add Card", systemImage: "plus")
+                Picker("Mode", selection: $surfaceMode) {
+                    ForEach(SurfaceMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+            }
+
+            ToolbarItem {
+                if surfaceMode == .canvas {
+                    Button {
+                        addCardAtViewportCenter()
+                    } label: {
+                        Label("Add Card", systemImage: "plus")
+                    }
                 }
             }
 

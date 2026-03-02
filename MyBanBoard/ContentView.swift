@@ -47,12 +47,14 @@ struct ContentView: View {
     private func addBoard() {
         let board = Board(title: "Board \(boards.count + 1)")
         modelContext.insert(board)
+        modelContext.saveWithLogging("ContentView.addBoard")
     }
 
     private func deleteBoards(offsets: IndexSet) {
         for index in offsets {
             modelContext.delete(boards[index])
         }
+        modelContext.saveWithLogging("ContentView.deleteBoards")
     }
 }
 

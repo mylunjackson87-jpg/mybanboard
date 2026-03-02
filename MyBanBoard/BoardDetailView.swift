@@ -39,6 +39,7 @@ struct BoardDetailView: View {
         .navigationTitle(board.title)
         .onChange(of: board.title) {
             board.updatedAt = .now
+            modelContext.saveWithLogging("BoardDetailView.titleChange")
         }
     }
 
@@ -54,6 +55,7 @@ struct BoardDetailView: View {
         let card = Card(board: board, title: "Card \(board.cards.count + 1)")
         modelContext.insert(card)
         board.updatedAt = .now
+        modelContext.saveWithLogging("BoardDetailView.addCard")
     }
 
     private func deleteCards(offsets: IndexSet) {
@@ -61,12 +63,14 @@ struct BoardDetailView: View {
             modelContext.delete(cards[index])
         }
         board.updatedAt = .now
+        modelContext.saveWithLogging("BoardDetailView.deleteCards")
     }
 
     private func addColumn() {
         let column = Column(board: board, title: "Column \(board.columns.count + 1)", order: board.columns.count)
         modelContext.insert(column)
         board.updatedAt = .now
+        modelContext.saveWithLogging("BoardDetailView.addColumn")
     }
 
     private func deleteColumns(offsets: IndexSet) {
@@ -74,10 +78,12 @@ struct BoardDetailView: View {
             modelContext.delete(columns[index])
         }
         board.updatedAt = .now
+        modelContext.saveWithLogging("BoardDetailView.deleteColumns")
     }
 }
 
 private struct CardRowView: View {
+    @Environment(\.modelContext) private var modelContext
     @Bindable var card: Card
 
     var body: some View {
@@ -86,14 +92,24 @@ private struct CardRowView: View {
             TextField("Content", text: $card.content, axis: .vertical)
                 .lineLimit(2 ... 4)
         }
+        .onChange(of: card.title) {
+            modelContext.saveWithLogging("CardRowView.titleChange")
+        }
+        .onChange(of: card.content) {
+            modelContext.saveWithLogging("CardRowView.contentChange")
+        }
     }
 }
 
 private struct ColumnRowView: View {
+    @Environment(\.modelContext) private var modelContext
     @Bindable var column: Column
 
     var body: some View {
         TextField("Title", text: $column.title)
+            .onChange(of: column.title) {
+                modelContext.saveWithLogging("ColumnRowView.titleChange")
+            }
     }
 }
 

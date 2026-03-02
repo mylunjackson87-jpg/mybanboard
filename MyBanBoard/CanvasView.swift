@@ -20,6 +20,8 @@ struct CanvasView: View {
     @State private var dragTranslation: CGSize = .zero
     @State private var pinchScale: CGFloat = 1
 
+    private let surfaceSize: CGFloat = 5000
+
     var body: some View {
         GeometryReader { proxy in
             let viewportSize = proxy.size
@@ -28,10 +30,25 @@ struct CanvasView: View {
                 Color(platformBackgroundColor)
                     .ignoresSafeArea()
 
-                CanvasGridView()
-                    .frame(width: 5000, height: 5000)
-                    .scaleEffect(effectiveScale, anchor: .center)
-                    .offset(x: effectiveOffset.width, y: effectiveOffset.height)
+                ZStack {
+                    CanvasGridView()
+                        .frame(width: surfaceSize, height: surfaceSize)
+
+                    ForEach(canvasCards) { card in
+                        CanvasCardView(
+                            card: card,
+                            zoomScale: effectiveScale,
+                            onCommit: saveCardMutation
+                        )
+                        .position(
+                            x: surfaceSize / 2 + CGFloat(card.x),
+                            y: surfaceSize / 2 + CGFloat(card.y)
+                        )
+                    }
+                }
+                .frame(width: surfaceSize, height: surfaceSize)
+                .scaleEffect(effectiveScale, anchor: .center)
+                .offset(x: effectiveOffset.width, y: effectiveOffset.height)
             }
             .contentShape(Rectangle())
             .gesture(panGesture)
@@ -65,6 +82,12 @@ struct CanvasView: View {
                     .padding(8)
             }
         }
+    }
+
+    private var canvasCards: [Card] {
+        board.cards
+            .filter { $0.kanbanColumn == nil }
+            .sorted { $0.title.localizedCompare($1.title) == .orderedAscending }
     }
 
     private var effectiveScale: CGFloat {
@@ -107,16 +130,87 @@ struct CanvasView: View {
         board.updatedAt = .now
         modelContext.saveWithLogging("CanvasView.saveViewport")
     }
+
+    private func saveCardMutation() {
+        board.updatedAt = .now
+        modelContext.saveWithLogging("CanvasView.cardMutation")
+    }
 }
 
-private var platformBackgroundColor: Color {
-#if os(iOS)
-    return Color(uiColor: .systemBackground)
-#elseif os(macOS)
-    return Color(nsColor: .windowBackgroundColor)
-#else
-    return Color(.systemBackground)
-#endif
+private struct CanvasCardView: View {
+    @Bindable var card: Card
+    let zoomScale: CGFloat
+    let onCommit: () -> Void
+
+    @State private var dragTranslation: CGSize = .zero
+    @State private var resizeTranslation: CGSize = .zero
+
+    private let minWidth: CGFloat = 180
+    private let minHeight: CGFloat = 120
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(card.title)
+                .font(.headline)
+                .lineLimit(1)
+
+            if !card.content.isEmpty {
+                Text(card.content)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(width: effectiveWidth, height: effectiveHeight, alignment: .topLeading)
+        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(alignment: .bottomTrailing) {
+            Circle()
+                .fill(.tint)
+                .frame(width: 14, height: 14)
+                .padding(8)
+                .gesture(resizeGesture)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
+        .offset(dragTranslation)
+        .gesture(moveGesture)
+    }
+
+    private var effectiveWidth: CGFloat {
+        max(minWidth, CGFloat(card.width) + resizeTranslation.width / max(zoomScale, 0.5))
+    }
+
+    private var effectiveHeight: CGFloat {
+        max(minHeight, CGFloat(card.height) + resizeTranslation.height / max(zoomScale, 0.5))
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                dragTranslation = value.translation
+            }
+            .onEnded { value in
+                card.x += value.translation.width / max(zoomScale, 0.5)
+                card.y += value.translation.height / max(zoomScale, 0.5)
+                dragTranslation = .zero
+                onCommit()
+            }
+    }
+
+    private var resizeGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                resizeTranslation = value.translation
+            }
+            .onEnded { value in
+                card.width = Double(effectiveWidth)
+                card.height = Double(effectiveHeight)
+                resizeTranslation = .zero
+                onCommit()
+            }
+    }
 }
 
 private struct CanvasGridView: View {
@@ -154,4 +248,14 @@ private struct CanvasGridView: View {
             }
         }
     }
+}
+
+private var platformBackgroundColor: Color {
+#if os(iOS)
+    return Color(uiColor: .systemBackground)
+#elseif os(macOS)
+    return Color(nsColor: .windowBackgroundColor)
+#else
+    return Color(.systemBackground)
+#endif
 }

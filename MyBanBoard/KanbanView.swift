@@ -3,6 +3,7 @@ import SwiftData
 
 struct KanbanView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.undoManager) private var undoManager
     @Bindable var board: Board
 
     var body: some View {
@@ -24,7 +25,10 @@ struct KanbanView: View {
                         onDropCardBefore: { cardID, beforeCardID in
                             moveCard(cardID: cardID, to: column, before: beforeCardID)
                         },
-                        onSendToCanvas: sendCardToCanvas
+                        onSendToCanvas: sendCardToCanvas,
+                        onRename: { oldTitle, newTitle in
+                            renameColumn(columnID: column.id, from: oldTitle, to: newTitle)
+                        }
                     )
                 }
 
@@ -46,6 +50,11 @@ struct KanbanView: View {
         board.columns.sorted { $0.order < $1.order }
     }
 
+    private var undoService: UndoService? {
+        guard let undoManager else { return nil }
+        return UndoService(modelContext: modelContext, undoManager: undoManager)
+    }
+
     private func cards(in column: Column) -> [Card] {
         board.cards
             .filter { $0.kanbanColumn?.id == column.id }
@@ -56,9 +65,12 @@ struct KanbanView: View {
         let column = Column(board: board, title: "Column \(columns.count + 1)", order: columns.count)
         modelContext.insert(column)
         saveChanges(context: "KanbanView.addColumn")
+        undoService?.registerColumnCreated(ColumnSnapshot(column: column))
     }
 
     private func deleteColumn(_ column: Column) {
+        let columnSnapshot = ColumnSnapshot(column: column)
+        let cardsSnapshot = cards(in: column).map(CardSnapshot.init(card:))
         for card in cards(in: column) {
             card.kanbanColumn = nil
             card.orderInColumn = 0
@@ -66,6 +78,7 @@ struct KanbanView: View {
         modelContext.delete(column)
         normalizeColumnOrder()
         saveChanges(context: "KanbanView.deleteColumn")
+        undoService?.registerColumnDeleted(column: columnSnapshot, affectedCards: cardsSnapshot)
     }
 
     private func moveColumn(_ column: Column, by delta: Int) {
@@ -89,6 +102,7 @@ struct KanbanView: View {
     }
 
     private func moveCard(cardID: UUID, to destinationColumn: Column, before destinationCardID: UUID?) {
+        let beforeOrder = board.cards.map(CardOrderSnapshot.init(card:))
         guard let card = board.cards.first(where: { $0.id == cardID }) else { return }
         let sourceColumn = card.kanbanColumn
         card.kanbanColumn = destinationColumn
@@ -114,9 +128,17 @@ struct KanbanView: View {
         }
 
         saveChanges(context: "KanbanView.moveCard")
+        let afterOrder = board.cards.map(CardOrderSnapshot.init(card:))
+        undoService?.registerCardOrderChange(
+            actionName: sourceColumn?.id == destinationColumn.id ? "Reorder Card" : "Move Card",
+            before: beforeOrder,
+            after: afterOrder,
+            boardID: board.id
+        )
     }
 
     private func sendCardToCanvas(cardID: UUID) {
+        let beforeOrder = board.cards.map(CardOrderSnapshot.init(card:))
         guard let card = board.cards.first(where: { $0.id == cardID }) else { return }
         let sourceColumn = card.kanbanColumn
         card.kanbanColumn = nil
@@ -130,6 +152,19 @@ struct KanbanView: View {
         }
 
         saveChanges(context: "KanbanView.sendCardToCanvas")
+        let afterOrder = board.cards.map(CardOrderSnapshot.init(card:))
+        undoService?.registerCardOrderChange(
+            actionName: "Send to Canvas",
+            before: beforeOrder,
+            after: afterOrder,
+            boardID: board.id
+        )
+    }
+
+    private func renameColumn(columnID: UUID, from oldTitle: String, to newTitle: String) {
+        guard oldTitle != newTitle else { return }
+        undoService?.registerColumnRename(columnID: columnID, from: oldTitle, to: newTitle)
+        saveChanges(context: "KanbanView.renameColumn")
     }
 
     private func saveChanges(context: String = "KanbanView.saveChanges") {
@@ -150,6 +185,9 @@ private struct KanbanColumnView: View {
     let onDropCardAtEnd: (UUID) -> Void
     let onDropCardBefore: (UUID, UUID) -> Void
     let onSendToCanvas: (UUID) -> Void
+    let onRename: (String, String) -> Void
+    @FocusState private var titleFieldFocused: Bool
+    @State private var titleBeforeEditing: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -157,7 +195,11 @@ private struct KanbanColumnView: View {
                 TextField("Column", text: $column.title)
                     .font(.headline)
                     .textFieldStyle(.plain)
-                    .onSubmit(onSave)
+                    .focused($titleFieldFocused)
+                    .onSubmit {
+                        commitRenameIfNeeded()
+                        onSave()
+                    }
 
                 Button(action: onMoveLeft) {
                     Image(systemName: "arrow.left")
@@ -207,13 +249,23 @@ private struct KanbanColumnView: View {
         .frame(width: 280, alignment: .top)
         .frame(minHeight: 240, alignment: .top)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onChange(of: column.title) {
-            onSave()
+        .onChange(of: titleFieldFocused) { _, isFocused in
+            if isFocused {
+                titleBeforeEditing = column.title
+            } else {
+                commitRenameIfNeeded()
+            }
         }
         .dropDestination(for: String.self) { items, _ in
             guard let item = items.first, let draggedID = UUID(uuidString: item) else { return false }
             onDropCardAtEnd(draggedID)
             return true
         }
+    }
+
+    private func commitRenameIfNeeded() {
+        guard let before = titleBeforeEditing else { return }
+        titleBeforeEditing = nil
+        onRename(before, column.title)
     }
 }

@@ -15,6 +15,7 @@ import AppKit
 
 struct CanvasView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.undoManager) private var undoManager
     @Bindable var board: Board
     var isDrawingMode: Bool
 
@@ -46,7 +47,9 @@ struct CanvasView: View {
                         CanvasCardView(
                             card: card,
                             zoomScale: effectiveScale,
-                            onCommit: saveCardMutation,
+                            onFrameCommit: registerCardFrameChange,
+                            onTextCommit: registerCardTextChange,
+                            onDelete: { deleteCard(card) },
                             onSendToKanban: { sendCardToKanban(card) }
                         )
                         .position(
@@ -103,6 +106,11 @@ struct CanvasView: View {
         max(0.5, min(2.5, CGFloat(board.viewportScale) * pinchScale))
     }
 
+    private var undoService: UndoService? {
+        guard let undoManager else { return nil }
+        return UndoService(modelContext: modelContext, undoManager: undoManager)
+    }
+
     private var effectiveOffset: CGSize {
         CGSize(
             width: board.viewportOffsetX + dragTranslation.width,
@@ -151,6 +159,7 @@ struct CanvasView: View {
     }
 
     private func sendCardToKanban(_ card: Card) {
+        let beforeOrder = board.cards.map(CardOrderSnapshot.init(card:))
         let column: Column
         if let firstColumn = board.columns.sorted(by: { $0.order < $1.order }).first {
             column = firstColumn
@@ -165,17 +174,51 @@ struct CanvasView: View {
         card.orderInColumn = existing.count
         board.updatedAt = .now
         modelContext.saveWithLogging("CanvasView.sendCardToKanban")
+        let afterOrder = board.cards.map(CardOrderSnapshot.init(card:))
+        undoService?.registerCardOrderChange(
+            actionName: "Send to Kanban",
+            before: beforeOrder,
+            after: afterOrder,
+            boardID: board.id
+        )
+    }
+
+    private func deleteCard(_ card: Card) {
+        let snapshot = CardSnapshot(card: card)
+        modelContext.delete(card)
+        board.updatedAt = .now
+        modelContext.saveWithLogging("CanvasView.deleteCard")
+        undoService?.registerCardDeleted(snapshot)
+    }
+
+    private func registerCardFrameChange(cardID: UUID, before: CardFrameSnapshot, after: CardFrameSnapshot) {
+        guard before.x != after.x || before.y != after.y || before.width != after.width || before.height != after.height else {
+            return
+        }
+        saveCardMutation()
+        undoService?.registerCardFrameChange(cardID: cardID, from: before, to: after)
+    }
+
+    private func registerCardTextChange(cardID: UUID, before: CardTextSnapshot, after: CardTextSnapshot) {
+        guard before.title != after.title || before.content != after.content else { return }
+        saveCardMutation()
+        undoService?.registerCardTextChange(cardID: cardID, from: before, to: after)
     }
 }
 
 private struct CanvasCardView: View {
     @Bindable var card: Card
     let zoomScale: CGFloat
-    let onCommit: () -> Void
+    let onFrameCommit: (UUID, CardFrameSnapshot, CardFrameSnapshot) -> Void
+    let onTextCommit: (UUID, CardTextSnapshot, CardTextSnapshot) -> Void
+    let onDelete: () -> Void
     let onSendToKanban: () -> Void
 
     @State private var dragTranslation: CGSize = .zero
     @State private var resizeTranslation: CGSize = .zero
+    @State private var gestureStartFrame: CardFrameSnapshot?
+    @State private var textBaseline: CardTextSnapshot?
+    @State private var textDebounceTask: DispatchWorkItem?
 
     private let minWidth: CGFloat = 180
     private let minHeight: CGFloat = 120
@@ -185,7 +228,7 @@ private struct CanvasCardView: View {
             TextField("Title", text: $card.title)
                 .font(.headline)
                 .textFieldStyle(.plain)
-                .onSubmit(onCommit)
+                .onSubmit(flushTextChanges)
 
             TextEditor(text: $card.content)
                 .font(.subheadline)
@@ -208,9 +251,19 @@ private struct CanvasCardView: View {
         .gesture(moveGesture)
         .contextMenu {
             Button("Send to Kanban", action: onSendToKanban)
+            Button("Delete Card", role: .destructive, action: onDelete)
         }
-        .onChange(of: card.title) { onCommit() }
-        .onChange(of: card.content) { onCommit() }
+        .onChange(of: card.title) { oldValue, _ in
+            beginTextSessionIfNeeded(previousTitle: oldValue, previousContent: card.content)
+            scheduleTextCommit()
+        }
+        .onChange(of: card.content) { oldValue, _ in
+            beginTextSessionIfNeeded(previousTitle: card.title, previousContent: oldValue)
+            scheduleTextCommit()
+        }
+        .onDisappear {
+            flushTextChanges()
+        }
     }
 
     private var effectiveWidth: CGFloat {
@@ -224,27 +277,66 @@ private struct CanvasCardView: View {
     private var moveGesture: some Gesture {
         DragGesture()
             .onChanged { value in
+                if gestureStartFrame == nil {
+                    gestureStartFrame = currentFrameSnapshot
+                }
                 dragTranslation = value.translation
             }
             .onEnded { value in
                 card.x += value.translation.width / max(zoomScale, 0.5)
                 card.y += value.translation.height / max(zoomScale, 0.5)
                 dragTranslation = .zero
-                onCommit()
+                if let start = gestureStartFrame {
+                    onFrameCommit(card.id, start, currentFrameSnapshot)
+                }
+                gestureStartFrame = nil
             }
     }
 
     private var resizeGesture: some Gesture {
         DragGesture()
             .onChanged { value in
+                if gestureStartFrame == nil {
+                    gestureStartFrame = currentFrameSnapshot
+                }
                 resizeTranslation = value.translation
             }
             .onEnded { value in
                 card.width = Double(effectiveWidth)
                 card.height = Double(effectiveHeight)
                 resizeTranslation = .zero
-                onCommit()
+                if let start = gestureStartFrame {
+                    onFrameCommit(card.id, start, currentFrameSnapshot)
+                }
+                gestureStartFrame = nil
             }
+    }
+
+    private var currentFrameSnapshot: CardFrameSnapshot {
+        CardFrameSnapshot(x: card.x, y: card.y, width: card.width, height: card.height)
+    }
+
+    private func beginTextSessionIfNeeded(previousTitle: String, previousContent: String) {
+        guard textBaseline == nil else { return }
+        textBaseline = CardTextSnapshot(title: previousTitle, content: previousContent)
+    }
+
+    private func scheduleTextCommit() {
+        textDebounceTask?.cancel()
+        let work = DispatchWorkItem {
+            flushTextChanges()
+        }
+        textDebounceTask = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    private func flushTextChanges() {
+        textDebounceTask?.cancel()
+        textDebounceTask = nil
+        guard let baseline = textBaseline else { return }
+        textBaseline = nil
+        let updated = CardTextSnapshot(title: card.title, content: card.content)
+        onTextCommit(card.id, baseline, updated)
     }
 }
 

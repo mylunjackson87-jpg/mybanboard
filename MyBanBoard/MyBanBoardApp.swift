@@ -8,6 +8,9 @@
 import SwiftUI
 import SwiftData
 import OSLog
+#if os(macOS)
+import AppKit
+#endif
 
 @main
 struct MyBanBoardApp: App {
@@ -19,23 +22,16 @@ struct MyBanBoardApp: App {
             Card.self,
             Column.self,
         ])
-        let cloudKitConfiguration = ModelConfiguration(
+        let localConfiguration = ModelConfiguration(
             schema: schema,
             isStoredInMemoryOnly: false,
-            cloudKitDatabase: .automatic
+            cloudKitDatabase: .none
         )
-        let localConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
-            return try ModelContainer(for: schema, configurations: [cloudKitConfiguration])
+            return try ModelContainer(for: schema, configurations: [localConfiguration])
         } catch {
-            Self.logger.error("CloudKit model container init failed: \(error.localizedDescription, privacy: .public). Falling back to local store.")
-
-            do {
-                return try ModelContainer(for: schema, configurations: [localConfiguration])
-            } catch {
-                fatalError("Could not create local fallback ModelContainer: \(error)")
-            }
+            fatalError("Could not create ModelContainer: \(error)")
         }
     }()
 
@@ -44,5 +40,20 @@ struct MyBanBoardApp: App {
             ContentView()
         }
         .modelContainer(sharedModelContainer)
+#if os(macOS)
+        .commands {
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") {
+                    NSApp.keyWindow?.undoManager?.undo()
+                }
+                .keyboardShortcut("z", modifiers: .command)
+
+                Button("Redo") {
+                    NSApp.keyWindow?.undoManager?.redo()
+                }
+                .keyboardShortcut("Z", modifiers: [.command, .shift])
+            }
+        }
+#endif
     }
 }

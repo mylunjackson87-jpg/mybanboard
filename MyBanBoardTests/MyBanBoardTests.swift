@@ -124,6 +124,101 @@ struct MyBanBoardTests {
 
         #expect(fetchedCards.map(\.orderInColumn) == [0, 1, 2])
     }
+
+    @MainActor @Test func undoRedoCardFrameMoveRestoresPosition() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let undoManager = UndoManager()
+        let undoService = UndoService(modelContext: context, undoManager: undoManager)
+
+        let board = Board(title: "Frame")
+        context.insert(board)
+        let card = Card(board: board, title: "Card", x: 0, y: 0, width: 260, height: 160)
+        context.insert(card)
+        try context.save()
+
+        let from = CardFrameSnapshot(x: 0, y: 0, width: 260, height: 160)
+        card.x = 120
+        card.y = 80
+        try context.save()
+        let to = CardFrameSnapshot(x: 120, y: 80, width: 260, height: 160)
+
+        undoService.registerCardFrameChange(cardID: card.id, from: from, to: to)
+
+        undoManager.undo()
+        #expect(card.x == 0)
+        #expect(card.y == 0)
+
+        undoManager.redo()
+        #expect(card.x == 120)
+        #expect(card.y == 80)
+    }
+
+    @MainActor @Test func undoSendToKanbanRestoresCanvasState() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let undoManager = UndoManager()
+        let undoService = UndoService(modelContext: context, undoManager: undoManager)
+
+        let board = Board(title: "Transfer")
+        context.insert(board)
+        let todo = Column(board: board, title: "Todo", order: 0)
+        context.insert(todo)
+        let card = Card(board: board, title: "Card", x: 10, y: 20, width: 260, height: 160, kanbanColumn: nil, orderInColumn: 0)
+        context.insert(card)
+        try context.save()
+
+        let before = board.cards.map(CardOrderSnapshot.init(card:))
+        card.kanbanColumn = todo
+        card.orderInColumn = 0
+        try context.save()
+        let after = board.cards.map(CardOrderSnapshot.init(card:))
+
+        undoService.registerCardOrderChange(actionName: "Send to Kanban", before: before, after: after, boardID: board.id)
+
+        undoManager.undo()
+        #expect(card.kanbanColumn == nil)
+        #expect(card.x == 10)
+        #expect(card.y == 20)
+        #expect(card.width == 260)
+        #expect(card.height == 160)
+
+        undoManager.redo()
+        #expect(card.kanbanColumn?.id == todo.id)
+    }
+
+    @MainActor @Test func undoReorderRestoresOriginalOrderInColumn() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let undoManager = UndoManager()
+        let undoService = UndoService(modelContext: context, undoManager: undoManager)
+
+        let board = Board(title: "Reorder")
+        context.insert(board)
+        let column = Column(board: board, title: "Todo", order: 0)
+        context.insert(column)
+        let first = Card(board: board, title: "First", kanbanColumn: column, orderInColumn: 0)
+        let second = Card(board: board, title: "Second", kanbanColumn: column, orderInColumn: 1)
+        context.insert(first)
+        context.insert(second)
+        try context.save()
+
+        let before = board.cards.map(CardOrderSnapshot.init(card:))
+        first.orderInColumn = 1
+        second.orderInColumn = 0
+        try context.save()
+        let after = board.cards.map(CardOrderSnapshot.init(card:))
+
+        undoService.registerCardOrderChange(actionName: "Reorder Card", before: before, after: after, boardID: board.id)
+
+        undoManager.undo()
+        #expect(first.orderInColumn == 0)
+        #expect(second.orderInColumn == 1)
+
+        undoManager.redo()
+        #expect(first.orderInColumn == 1)
+        #expect(second.orderInColumn == 0)
+    }
 }
 
 private func makeInMemoryContainer() throws -> ModelContainer {

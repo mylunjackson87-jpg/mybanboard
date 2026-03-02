@@ -17,6 +17,7 @@ struct BoardDetailView: View {
     }
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.undoManager) private var undoManager
     @Bindable var board: Board
     @State private var isShowingManageSheet = false
     @State private var surfaceMode: SurfaceMode = .canvas
@@ -70,6 +71,22 @@ struct BoardDetailView: View {
                     isShowingManageSheet = true
                 }
             }
+
+            ToolbarItemGroup {
+                Button {
+                    undoManager?.undo()
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(!(undoManager?.canUndo ?? false))
+
+                Button {
+                    undoManager?.redo()
+                } label: {
+                    Label("Redo", systemImage: "arrow.uturn.forward")
+                }
+                .disabled(!(undoManager?.canRedo ?? false))
+            }
         }
         .sheet(isPresented: $isShowingManageSheet) {
             NavigationStack {
@@ -98,11 +115,17 @@ struct BoardDetailView: View {
         board.columns.sorted { $0.order < $1.order }
     }
 
+    private var undoService: UndoService? {
+        guard let undoManager else { return nil }
+        return UndoService(modelContext: modelContext, undoManager: undoManager)
+    }
+
     private func addCard() {
         let card = Card(board: board, title: "Card \(board.cards.count + 1)")
         modelContext.insert(card)
         board.updatedAt = .now
         modelContext.saveWithLogging("BoardDetailView.addCard")
+        undoService?.registerCardCreated(CardSnapshot(card: card))
     }
 
     private func addCardAtViewportCenter() {
@@ -119,14 +142,19 @@ struct BoardDetailView: View {
         modelContext.insert(card)
         board.updatedAt = .now
         modelContext.saveWithLogging("BoardDetailView.addCardAtViewportCenter")
+        undoService?.registerCardCreated(CardSnapshot(card: card))
     }
 
     private func deleteCards(offsets: IndexSet) {
+        let deletedSnapshots = offsets.map { CardSnapshot(card: cards[$0]) }
         for index in offsets {
             modelContext.delete(cards[index])
         }
         board.updatedAt = .now
         modelContext.saveWithLogging("BoardDetailView.deleteCards")
+        for snapshot in deletedSnapshots {
+            undoService?.registerCardDeleted(snapshot)
+        }
     }
 
     private func addColumn() {
@@ -134,14 +162,27 @@ struct BoardDetailView: View {
         modelContext.insert(column)
         board.updatedAt = .now
         modelContext.saveWithLogging("BoardDetailView.addColumn")
+        undoService?.registerColumnCreated(ColumnSnapshot(column: column))
     }
 
     private func deleteColumns(offsets: IndexSet) {
+        let deletedColumns = offsets.map { columns[$0] }
+        let deletedColumnSnapshots = deletedColumns.map(ColumnSnapshot.init(column:))
+        let deletedCardSnapshots = deletedColumns.map { column in
+            board.cards
+                .filter { $0.kanbanColumn?.id == column.id }
+                .map(CardSnapshot.init(card:))
+        }
+
         for index in offsets {
             modelContext.delete(columns[index])
         }
         board.updatedAt = .now
         modelContext.saveWithLogging("BoardDetailView.deleteColumns")
+
+        for (columnSnapshot, cardsSnapshot) in zip(deletedColumnSnapshots, deletedCardSnapshots) {
+            undoService?.registerColumnDeleted(column: columnSnapshot, affectedCards: cardsSnapshot)
+        }
     }
 }
 

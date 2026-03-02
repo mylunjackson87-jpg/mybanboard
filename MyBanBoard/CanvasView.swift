@@ -16,6 +16,7 @@ import AppKit
 struct CanvasView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var board: Board
+    var isDrawingMode: Bool
 
     @State private var dragTranslation: CGSize = .zero
     @State private var pinchScale: CGFloat = 1
@@ -33,6 +34,13 @@ struct CanvasView: View {
                 ZStack {
                     CanvasGridView()
                         .frame(width: surfaceSize, height: surfaceSize)
+
+                    DrawingOverlayView(
+                        drawingData: $board.drawingData,
+                        isEnabled: isDrawingMode,
+                        onSave: saveDrawing
+                    )
+                    .frame(width: surfaceSize, height: surfaceSize)
 
                     ForEach(canvasCards) { card in
                         CanvasCardView(
@@ -135,6 +143,11 @@ struct CanvasView: View {
     private func saveCardMutation() {
         board.updatedAt = .now
         modelContext.saveWithLogging("CanvasView.cardMutation")
+    }
+
+    private func saveDrawing() {
+        board.updatedAt = .now
+        modelContext.saveWithLogging("CanvasView.saveDrawing")
     }
 
     private func sendCardToKanban(_ card: Card) {

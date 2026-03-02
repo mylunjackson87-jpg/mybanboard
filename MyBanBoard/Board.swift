@@ -16,6 +16,7 @@ final class Board {
     var viewportOffsetX: Double
     var viewportOffsetY: Double
     var viewportScale: Double
+    var drawingData: Data
     @Relationship(deleteRule: .cascade, inverse: \Card.board) var cards: [Card]
     @Relationship(deleteRule: .cascade, inverse: \Column.board) var columns: [Column]
 
@@ -25,7 +26,8 @@ final class Board {
         updatedAt: Date = .now,
         viewportOffsetX: Double = 0,
         viewportOffsetY: Double = 0,
-        viewportScale: Double = 1
+        viewportScale: Double = 1,
+        drawingData: Data = Data()
     ) {
         self.id = id
         self.title = title
@@ -33,6 +35,7 @@ final class Board {
         self.viewportOffsetX = viewportOffsetX
         self.viewportOffsetY = viewportOffsetY
         self.viewportScale = viewportScale
+        self.drawingData = drawingData
         self.cards = []
         self.columns = []
     }

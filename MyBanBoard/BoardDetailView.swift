@@ -20,11 +20,12 @@ struct BoardDetailView: View {
     @Bindable var board: Board
     @State private var isShowingManageSheet = false
     @State private var surfaceMode: SurfaceMode = .canvas
+    @State private var isDrawingMode = false
 
     var body: some View {
         Group {
             if surfaceMode == .canvas {
-                CanvasView(board: board)
+                CanvasView(board: board, isDrawingMode: isDrawingMode)
             } else {
                 KanbanView(board: board)
             }
@@ -47,6 +48,19 @@ struct BoardDetailView: View {
                         addCardAtViewportCenter()
                     } label: {
                         Label("Add Card", systemImage: "plus")
+                    }
+                }
+            }
+
+            ToolbarItem {
+                if surfaceMode == .canvas {
+                    Button {
+                        isDrawingMode.toggle()
+                    } label: {
+                        Label(
+                            isDrawingMode ? "Disable Drawing" : "Enable Drawing",
+                            systemImage: isDrawingMode ? "pencil.slash" : "pencil.tip"
+                        )
                     }
                 }
             }

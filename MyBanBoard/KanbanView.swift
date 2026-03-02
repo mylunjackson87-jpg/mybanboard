@@ -17,7 +17,13 @@ struct KanbanView: View {
                         onMoveLeft: { moveColumn(column, by: -1) },
                         onMoveRight: { moveColumn(column, by: 1) },
                         onDelete: { deleteColumn(column) },
-                        onSave: { saveChanges() }
+                        onSave: { saveChanges() },
+                        onDropCardAtEnd: { cardID in
+                            moveCard(cardID: cardID, to: column, before: nil)
+                        },
+                        onDropCardBefore: { cardID, beforeCardID in
+                            moveCard(cardID: cardID, to: column, before: beforeCardID)
+                        }
                     )
                 }
 
@@ -81,6 +87,34 @@ struct KanbanView: View {
         }
     }
 
+    private func moveCard(cardID: UUID, to destinationColumn: Column, before destinationCardID: UUID?) {
+        guard let card = board.cards.first(where: { $0.id == cardID }) else { return }
+        let sourceColumn = card.kanbanColumn
+        card.kanbanColumn = destinationColumn
+
+        var destinationCards = cards(in: destinationColumn).filter { $0.id != card.id }
+
+        if let destinationCardID,
+           let targetIndex = destinationCards.firstIndex(where: { $0.id == destinationCardID }) {
+            destinationCards.insert(card, at: targetIndex)
+        } else {
+            destinationCards.append(card)
+        }
+
+        for (index, columnCard) in destinationCards.enumerated() {
+            columnCard.orderInColumn = index
+        }
+
+        if let sourceColumn, sourceColumn.id != destinationColumn.id {
+            let sourceCards = cards(in: sourceColumn)
+            for (index, sourceCard) in sourceCards.enumerated() {
+                sourceCard.orderInColumn = index
+            }
+        }
+
+        saveChanges(context: "KanbanView.moveCard")
+    }
+
     private func saveChanges(context: String = "KanbanView.saveChanges") {
         board.updatedAt = .now
         modelContext.saveWithLogging(context)
@@ -96,6 +130,8 @@ private struct KanbanColumnView: View {
     let onMoveRight: () -> Void
     let onDelete: () -> Void
     let onSave: () -> Void
+    let onDropCardAtEnd: (UUID) -> Void
+    let onDropCardBefore: (UUID, UUID) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -134,6 +170,12 @@ private struct KanbanColumnView: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .draggable(card.id.uuidString)
+                .dropDestination(for: String.self) { items, _ in
+                    guard let item = items.first, let draggedID = UUID(uuidString: item) else { return false }
+                    onDropCardBefore(draggedID, card.id)
+                    return true
+                }
             }
 
             Spacer(minLength: 0)
@@ -144,6 +186,11 @@ private struct KanbanColumnView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onChange(of: column.title) {
             onSave()
+        }
+        .dropDestination(for: String.self) { items, _ in
+            guard let item = items.first, let draggedID = UUID(uuidString: item) else { return false }
+            onDropCardAtEnd(draggedID)
+            return true
         }
     }
 }

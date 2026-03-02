@@ -11,32 +11,31 @@ import SwiftData
 struct BoardDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var board: Board
+    @State private var isShowingManageSheet = false
 
     var body: some View {
-        Form {
-            Section("Board") {
-                TextField("Board Title", text: $board.title)
-            }
-
-            Section("Cards") {
-                ForEach(cards) { card in
-                    CardRowView(card: card)
+        CanvasView(board: board)
+        .navigationTitle(board.title)
+        .toolbar {
+            ToolbarItem {
+                Button("Manage") {
+                    isShowingManageSheet = true
                 }
-                .onDelete(perform: deleteCards)
-
-                Button("Add Card", action: addCard)
-            }
-
-            Section("Columns") {
-                ForEach(columns) { column in
-                    ColumnRowView(column: column)
-                }
-                .onDelete(perform: deleteColumns)
-
-                Button("Add Column", action: addColumn)
             }
         }
-        .navigationTitle(board.title)
+        .sheet(isPresented: $isShowingManageSheet) {
+            NavigationStack {
+                BoardManageView(
+                    board: board,
+                    cards: cards,
+                    columns: columns,
+                    addCard: addCard,
+                    deleteCards: deleteCards,
+                    addColumn: addColumn,
+                    deleteColumns: deleteColumns
+                )
+            }
+        }
         .onChange(of: board.title) {
             board.updatedAt = .now
             modelContext.saveWithLogging("BoardDetailView.titleChange")
@@ -79,6 +78,49 @@ struct BoardDetailView: View {
         }
         board.updatedAt = .now
         modelContext.saveWithLogging("BoardDetailView.deleteColumns")
+    }
+}
+
+private struct BoardManageView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Bindable var board: Board
+    let cards: [Card]
+    let columns: [Column]
+    let addCard: () -> Void
+    let deleteCards: (IndexSet) -> Void
+    let addColumn: () -> Void
+    let deleteColumns: (IndexSet) -> Void
+
+    var body: some View {
+        Form {
+            Section("Board") {
+                TextField("Board Title", text: $board.title)
+            }
+
+            Section("Cards") {
+                ForEach(cards) { card in
+                    CardRowView(card: card)
+                }
+                .onDelete(perform: deleteCards)
+                Button("Add Card", action: addCard)
+            }
+
+            Section("Columns") {
+                ForEach(columns) { column in
+                    ColumnRowView(column: column)
+                }
+                .onDelete(perform: deleteColumns)
+                Button("Add Column", action: addColumn)
+            }
+        }
+        .navigationTitle("Manage Board")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") {
+                    dismiss()
+                }
+            }
+        }
     }
 }
 

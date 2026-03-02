@@ -23,7 +23,8 @@ struct KanbanView: View {
                         },
                         onDropCardBefore: { cardID, beforeCardID in
                             moveCard(cardID: cardID, to: column, before: beforeCardID)
-                        }
+                        },
+                        onSendToCanvas: sendCardToCanvas
                     )
                 }
 
@@ -115,6 +116,22 @@ struct KanbanView: View {
         saveChanges(context: "KanbanView.moveCard")
     }
 
+    private func sendCardToCanvas(cardID: UUID) {
+        guard let card = board.cards.first(where: { $0.id == cardID }) else { return }
+        let sourceColumn = card.kanbanColumn
+        card.kanbanColumn = nil
+        card.orderInColumn = 0
+
+        if let sourceColumn {
+            let sourceCards = cards(in: sourceColumn)
+            for (index, sourceCard) in sourceCards.enumerated() {
+                sourceCard.orderInColumn = index
+            }
+        }
+
+        saveChanges(context: "KanbanView.sendCardToCanvas")
+    }
+
     private func saveChanges(context: String = "KanbanView.saveChanges") {
         board.updatedAt = .now
         modelContext.saveWithLogging(context)
@@ -132,6 +149,7 @@ private struct KanbanColumnView: View {
     let onSave: () -> Void
     let onDropCardAtEnd: (UUID) -> Void
     let onDropCardBefore: (UUID, UUID) -> Void
+    let onSendToCanvas: (UUID) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -175,6 +193,11 @@ private struct KanbanColumnView: View {
                     guard let item = items.first, let draggedID = UUID(uuidString: item) else { return false }
                     onDropCardBefore(draggedID, card.id)
                     return true
+                }
+                .contextMenu {
+                    Button("Send to Canvas") {
+                        onSendToCanvas(card.id)
+                    }
                 }
             }
 

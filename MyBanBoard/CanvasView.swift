@@ -38,7 +38,8 @@ struct CanvasView: View {
                         CanvasCardView(
                             card: card,
                             zoomScale: effectiveScale,
-                            onCommit: saveCardMutation
+                            onCommit: saveCardMutation,
+                            onSendToKanban: { sendCardToKanban(card) }
                         )
                         .position(
                             x: surfaceSize / 2 + CGFloat(card.x),
@@ -135,12 +136,30 @@ struct CanvasView: View {
         board.updatedAt = .now
         modelContext.saveWithLogging("CanvasView.cardMutation")
     }
+
+    private func sendCardToKanban(_ card: Card) {
+        let column: Column
+        if let firstColumn = board.columns.sorted(by: { $0.order < $1.order }).first {
+            column = firstColumn
+        } else {
+            let newColumn = Column(board: board, title: "Inbox", order: 0)
+            modelContext.insert(newColumn)
+            column = newColumn
+        }
+
+        let existing = board.cards.filter { $0.kanbanColumn?.id == column.id }
+        card.kanbanColumn = column
+        card.orderInColumn = existing.count
+        board.updatedAt = .now
+        modelContext.saveWithLogging("CanvasView.sendCardToKanban")
+    }
 }
 
 private struct CanvasCardView: View {
     @Bindable var card: Card
     let zoomScale: CGFloat
     let onCommit: () -> Void
+    let onSendToKanban: () -> Void
 
     @State private var dragTranslation: CGSize = .zero
     @State private var resizeTranslation: CGSize = .zero
@@ -174,6 +193,9 @@ private struct CanvasCardView: View {
         .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
         .offset(dragTranslation)
         .gesture(moveGesture)
+        .contextMenu {
+            Button("Send to Kanban", action: onSendToKanban)
+        }
         .onChange(of: card.title) { onCommit() }
         .onChange(of: card.content) { onCommit() }
     }

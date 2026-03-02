@@ -6,44 +6,57 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct ContentView: View {
-    @State private var boards = Board.sampleBoards
-    @State private var selection: Board.ID?
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Board.updatedAt, order: .reverse) private var boards: [Board]
 
     var body: some View {
         NavigationSplitView {
-            List(boards, selection: $selection) { board in
-                Text(board.title)
-                    .tag(board.id)
+            List {
+                ForEach(boards) { board in
+                    NavigationLink {
+                        BoardDetailView(board: board)
+                    } label: {
+                        Text(board.title)
+                    }
+                }
+                .onDelete(perform: deleteBoards)
             }
             .navigationTitle("Boards")
 #if os(macOS)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
 #endif
-        } detail: {
-            if let selectedBoard {
-                BoardDetailView(board: selectedBoard)
-            } else {
-                ContentUnavailableView("Select a Board", systemImage: "rectangle.stack")
+            .toolbar {
+                ToolbarItem {
+                    Button(action: addBoard) {
+                        Label("Add Board", systemImage: "plus")
+                    }
+                }
             }
-        }
-        .onAppear {
-            if selection == nil {
-                selection = boards.first?.id
+        } detail: {
+            if let board = boards.first {
+                BoardDetailView(board: board)
+            } else {
+                ContentUnavailableView("Create a Board", systemImage: "rectangle.stack")
             }
         }
     }
 
-    private var selectedBoard: Board? {
-        guard let selection else {
-            return nil
-        }
+    private func addBoard() {
+        let board = Board(title: "Board \(boards.count + 1)")
+        modelContext.insert(board)
+    }
 
-        return boards.first { $0.id == selection }
+    private func deleteBoards(offsets: IndexSet) {
+        for index in offsets {
+            modelContext.delete(boards[index])
+        }
     }
 }
 
 #Preview {
     ContentView()
+        .modelContainer(PreviewSampleData.container)
 }

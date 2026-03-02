@@ -6,15 +6,34 @@
 //
 
 import Foundation
+import SwiftData
 
-struct Board: Identifiable, Hashable {
-    let id: UUID
+@Model
+final class Board {
+    @Attribute(.unique) var id: UUID
     var title: String
-    var detailText: String
+    var updatedAt: Date
+    var viewportOffsetX: Double
+    var viewportOffsetY: Double
+    var viewportScale: Double
+    @Relationship(deleteRule: .cascade, inverse: \Card.board) var cards: [Card]
+    @Relationship(deleteRule: .cascade, inverse: \Column.board) var columns: [Column]
 
-    static let sampleBoards: [Board] = [
-        Board(id: UUID(), title: "Personal", detailText: "Capture ideas and tasks."),
-        Board(id: UUID(), title: "Work", detailText: "Track delivery for current sprint."),
-        Board(id: UUID(), title: "Planning", detailText: "Outline upcoming goals.")
-    ]
+    init(
+        id: UUID = UUID(),
+        title: String,
+        updatedAt: Date = .now,
+        viewportOffsetX: Double = 0,
+        viewportOffsetY: Double = 0,
+        viewportScale: Double = 1
+    ) {
+        self.id = id
+        self.title = title
+        self.updatedAt = updatedAt
+        self.viewportOffsetX = viewportOffsetX
+        self.viewportOffsetY = viewportOffsetY
+        self.viewportScale = viewportScale
+        self.cards = []
+        self.columns = []
+    }
 }

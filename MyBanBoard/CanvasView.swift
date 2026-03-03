@@ -26,6 +26,7 @@ struct CanvasView: View {
     @Bindable var board: Board
     var isDrawingMode: Bool
     var isSnapEnabled: Bool
+    @Binding var jumpToCardID: UUID?
 
     @State private var dragTranslation: CGSize = .zero
     @State private var pinchScale: CGFloat = 1
@@ -40,6 +41,7 @@ struct CanvasView: View {
     @State private var lassoBaseSelection = Set<UUID>()
 
     @State private var showDeleteSelectionConfirmation = false
+    @State private var highlightedJumpCardID: UUID?
 
     private let surfaceSize: CGFloat = 5000
     private let gridSnapStep: Double = 40
@@ -68,6 +70,7 @@ struct CanvasView: View {
                             card: card,
                             zoomScale: effectiveScale,
                             isSelected: selectedCardIDs.contains(card.id),
+                            isJumpHighlighted: highlightedJumpCardID == card.id,
                             groupDragOffset: groupDragOffset(for: card.id),
                             usesGroupDrag: selectedCardIDs.count > 1 && selectedCardIDs.contains(card.id),
                             onSelect: { selectCard(card.id) },
@@ -128,6 +131,12 @@ struct CanvasView: View {
             .onDisappear {
                 saveViewport()
                 clearTransientInteractionState(keepSelection: false)
+            }
+            .onAppear {
+                handleJumpHighlight(for: jumpToCardID)
+            }
+            .onChange(of: jumpToCardID) { _, newValue in
+                handleJumpHighlight(for: newValue)
             }
             .animation(.interactiveSpring(response: 0.2, dampingFraction: 0.85), value: dragTranslation)
             .onTapGesture(count: 2) {
@@ -519,12 +528,31 @@ struct CanvasView: View {
     private func snappedCoordinate(_ value: Double) -> Double {
         (value / gridSnapStep).rounded() * gridSnapStep
     }
+
+    private func handleJumpHighlight(for cardID: UUID?) {
+        guard let cardID else { return }
+        guard canvasCards.contains(where: { $0.id == cardID }) else {
+            jumpToCardID = nil
+            return
+        }
+
+        selectedCardIDs = [cardID]
+        highlightedJumpCardID = cardID
+        jumpToCardID = nil
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            if highlightedJumpCardID == cardID {
+                highlightedJumpCardID = nil
+            }
+        }
+    }
 }
 
 private struct CanvasCardView: View {
     @Bindable var card: Card
     let zoomScale: CGFloat
     let isSelected: Bool
+    let isJumpHighlighted: Bool
     let groupDragOffset: CGSize
     let usesGroupDrag: Bool
     let onSelect: () -> Void
@@ -564,6 +592,10 @@ private struct CanvasCardView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(isJumpHighlighted ? Color.orange : Color.clear, lineWidth: 3)
         }
         .overlay(alignment: .bottomTrailing) {
             Circle()

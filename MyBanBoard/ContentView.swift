@@ -12,20 +12,28 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Board.updatedAt, order: .reverse) private var boards: [Board]
     @State private var isShowingDebug = false
+    @State private var boardSearchText = ""
 
     var body: some View {
         NavigationSplitView {
             List {
-                ForEach(boards) { board in
-                    NavigationLink {
-                        BoardDetailView(board: board)
-                    } label: {
-                        Text(board.title)
+                if filteredBoards.isEmpty {
+                    ContentUnavailableView("No Matching Boards", systemImage: "magnifyingglass")
+                } else {
+                    ForEach(filteredBoards) { board in
+                        NavigationLink {
+                            BoardDetailView(board: board)
+                        } label: {
+                            Text(board.title)
+                        }
+                    }
+                    .onDelete { offsets in
+                        deleteBoards(offsets: offsets, from: filteredBoards)
                     }
                 }
-                .onDelete(perform: deleteBoards)
             }
             .navigationTitle("Boards")
+            .searchable(text: $boardSearchText, prompt: "Search Boards")
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Boards")
@@ -51,12 +59,18 @@ struct ContentView: View {
                 }
             }
         } detail: {
-            if let board = boards.first {
+            if let board = filteredBoards.first {
                 BoardDetailView(board: board)
             } else {
                 ContentUnavailableView("Create a Board", systemImage: "rectangle.stack")
             }
         }
+    }
+
+    private var filteredBoards: [Board] {
+        let query = boardSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return boards }
+        return boards.filter { $0.title.localizedCaseInsensitiveContains(query) }
     }
 
     private func addBoard() {
@@ -65,9 +79,9 @@ struct ContentView: View {
         modelContext.saveWithLogging("ContentView.addBoard")
     }
 
-    private func deleteBoards(offsets: IndexSet) {
+    private func deleteBoards(offsets: IndexSet, from source: [Board]) {
         for index in offsets {
-            modelContext.delete(boards[index])
+            modelContext.delete(source[index])
         }
         modelContext.saveWithLogging("ContentView.deleteBoards")
     }

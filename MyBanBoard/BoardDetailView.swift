@@ -20,14 +20,22 @@ struct BoardDetailView: View {
     @Environment(\.undoManager) private var undoManager
     @Bindable var board: Board
     @State private var isShowingManageSheet = false
+    @State private var isShowingCardSearch = false
     @State private var surfaceMode: SurfaceMode = .canvas
     @State private var isDrawingMode = false
     @State private var isSnapEnabled = false
+    @State private var cardSearchText = ""
+    @State private var jumpToCardID: UUID?
 
     var body: some View {
         Group {
             if surfaceMode == .canvas {
-                CanvasView(board: board, isDrawingMode: isDrawingMode, isSnapEnabled: isSnapEnabled)
+                CanvasView(
+                    board: board,
+                    isDrawingMode: isDrawingMode,
+                    isSnapEnabled: isSnapEnabled,
+                    jumpToCardID: $jumpToCardID
+                )
             } else {
                 KanbanView(board: board)
             }
@@ -83,6 +91,14 @@ struct BoardDetailView: View {
                 }
             }
 
+            ToolbarItem {
+                Button {
+                    isShowingCardSearch = true
+                } label: {
+                    Label("Search Cards", systemImage: "magnifyingglass")
+                }
+            }
+
             ToolbarItemGroup {
                 Button {
                     undoManager?.undo()
@@ -109,6 +125,15 @@ struct BoardDetailView: View {
                     deleteCards: deleteCards,
                     addColumn: addColumn,
                     deleteColumns: deleteColumns
+                )
+            }
+        }
+        .sheet(isPresented: $isShowingCardSearch) {
+            NavigationStack {
+                BoardCardSearchView(
+                    cards: cards,
+                    searchText: $cardSearchText,
+                    onSelect: handleCardSearchSelection
                 )
             }
         }
@@ -193,6 +218,85 @@ struct BoardDetailView: View {
 
         for (columnSnapshot, cardsSnapshot) in zip(deletedColumnSnapshots, deletedCardSnapshots) {
             undoService?.registerColumnDeleted(column: columnSnapshot, affectedCards: cardsSnapshot)
+        }
+    }
+
+    private func handleCardSearchSelection(_ card: Card) {
+        isShowingCardSearch = false
+
+        if card.kanbanColumn != nil {
+            surfaceMode = .kanban
+            return
+        }
+
+        let scale = max(0.5, min(2.5, board.viewportScale))
+        board.viewportOffsetX = -card.x * scale
+        board.viewportOffsetY = -card.y * scale
+        board.updatedAt = .now
+        modelContext.saveWithLogging("BoardDetailView.jumpToCard")
+
+        surfaceMode = .canvas
+        jumpToCardID = nil
+        DispatchQueue.main.async {
+            jumpToCardID = card.id
+        }
+    }
+}
+
+private struct BoardCardSearchView: View {
+    @Environment(\.dismiss) private var dismiss
+    let cards: [Card]
+    @Binding var searchText: String
+    let onSelect: (Card) -> Void
+
+    var body: some View {
+        List(filteredCards) { card in
+            Button {
+                onSelect(card)
+                dismiss()
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(card.title.isEmpty ? "Untitled Card" : card.title)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(card.kanbanColumn == nil ? "Canvas" : "Kanban")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if !card.content.isEmpty {
+                        Text(card.content)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .buttonStyle(.plain)
+        }
+        .navigationTitle("Find Card")
+        .searchable(text: $searchText, prompt: "Title or content")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") {
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private var filteredCards: [Card] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return cards }
+
+        let needle = query.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        return cards.filter { card in
+            let title = card.title.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            let content = card.content.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            return title.contains(needle) || content.contains(needle)
         }
     }
 }

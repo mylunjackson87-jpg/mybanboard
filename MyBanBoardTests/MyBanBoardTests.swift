@@ -219,6 +219,37 @@ struct MyBanBoardTests {
         #expect(first.orderInColumn == 1)
         #expect(second.orderInColumn == 0)
     }
+
+    @MainActor @Test func undoWorksAfterUndoServiceFallsOutOfScope() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let undoManager = UndoManager()
+
+        let board = Board(title: "Ephemeral Service")
+        context.insert(board)
+        let card = Card(board: board, title: "Card", x: 0, y: 0, width: 260, height: 160)
+        context.insert(card)
+        try context.save()
+
+        let from = CardFrameSnapshot(x: 0, y: 0, width: 260, height: 160)
+        card.x = 80
+        card.y = 40
+        try context.save()
+        let to = CardFrameSnapshot(x: 80, y: 40, width: 260, height: 160)
+
+        do {
+            let undoService = UndoService(modelContext: context, undoManager: undoManager)
+            undoService.registerCardFrameChange(cardID: card.id, from: from, to: to)
+        }
+
+        undoManager.undo()
+        #expect(card.x == 0)
+        #expect(card.y == 0)
+
+        undoManager.redo()
+        #expect(card.x == 80)
+        #expect(card.y == 40)
+    }
 }
 
 private func makeInMemoryContainer() throws -> ModelContainer {

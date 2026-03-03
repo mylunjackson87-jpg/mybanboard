@@ -160,9 +160,11 @@ final class UndoService {
     }
 
     private func register(actionName: String, undo: @escaping () -> Void, redo: @escaping () -> Void) {
-        undoManager.registerUndo(withTarget: self) { target in
+        let service = self
+        undoManager.registerUndo(withTarget: undoManager) { manager in
             undo()
-            target.register(actionName: actionName, undo: redo, redo: undo)
+            service.register(actionName: actionName, undo: redo, redo: undo)
+            manager.setActionName(actionName)
         }
         undoManager.setActionName(actionName)
     }

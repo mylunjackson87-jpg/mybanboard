@@ -25,6 +25,7 @@ struct CanvasView: View {
     @Environment(\.undoManager) private var undoManager
     @Bindable var board: Board
     var isDrawingMode: Bool
+    var isSnapEnabled: Bool
 
     @State private var dragTranslation: CGSize = .zero
     @State private var pinchScale: CGFloat = 1
@@ -41,6 +42,7 @@ struct CanvasView: View {
     @State private var showDeleteSelectionConfirmation = false
 
     private let surfaceSize: CGFloat = 5000
+    private let gridSnapStep: Double = 40
 
     var body: some View {
         GeometryReader { proxy in
@@ -407,8 +409,15 @@ struct CanvasView: View {
         var changes: [CardFrameChange] = []
         for card in canvasCards where movingIDs.contains(card.id) {
             let before = CardFrameSnapshot(x: card.x, y: card.y, width: card.width, height: card.height)
-            card.x += deltaX
-            card.y += deltaY
+            let movedX = card.x + deltaX
+            let movedY = card.y + deltaY
+            if isSnapEnabled {
+                card.x = snappedCoordinate(movedX)
+                card.y = snappedCoordinate(movedY)
+            } else {
+                card.x = movedX
+                card.y = movedY
+            }
             let after = CardFrameSnapshot(x: card.x, y: card.y, width: card.width, height: card.height)
             changes.append(CardFrameChange(cardID: card.id, from: before, to: after))
         }
@@ -475,17 +484,40 @@ struct CanvasView: View {
     }
 
     private func registerCardFrameChange(cardID: UUID, before: CardFrameSnapshot, after: CardFrameSnapshot) {
-        guard before.x != after.x || before.y != after.y || before.width != after.width || before.height != after.height else {
+        let moved = before.x != after.x || before.y != after.y
+        let resized = before.width != after.width || before.height != after.height
+
+        let committedAfter: CardFrameSnapshot
+        if isSnapEnabled, moved, !resized {
+            committedAfter = CardFrameSnapshot(
+                x: snappedCoordinate(after.x),
+                y: snappedCoordinate(after.y),
+                width: after.width,
+                height: after.height
+            )
+            if let card = canvasCards.first(where: { $0.id == cardID }) {
+                card.x = committedAfter.x
+                card.y = committedAfter.y
+            }
+        } else {
+            committedAfter = after
+        }
+
+        guard before.x != committedAfter.x || before.y != committedAfter.y || before.width != committedAfter.width || before.height != committedAfter.height else {
             return
         }
         saveCardMutation()
-        undoService?.registerCardFrameChange(cardID: cardID, from: before, to: after)
+        undoService?.registerCardFrameChange(cardID: cardID, from: before, to: committedAfter)
     }
 
     private func registerCardTextChange(cardID: UUID, before: CardTextSnapshot, after: CardTextSnapshot) {
         guard before.title != after.title || before.content != after.content else { return }
         saveCardMutation()
         undoService?.registerCardTextChange(cardID: cardID, from: before, to: after)
+    }
+
+    private func snappedCoordinate(_ value: Double) -> Double {
+        (value / gridSnapStep).rounded() * gridSnapStep
     }
 }
 

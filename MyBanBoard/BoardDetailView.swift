@@ -22,11 +22,12 @@ struct BoardDetailView: View {
     @State private var isShowingManageSheet = false
     @State private var surfaceMode: SurfaceMode = .canvas
     @State private var isDrawingMode = false
+    @State private var isSnapEnabled = false
 
     var body: some View {
         Group {
             if surfaceMode == .canvas {
-                CanvasView(board: board, isDrawingMode: isDrawingMode)
+                CanvasView(board: board, isDrawingMode: isDrawingMode, isSnapEnabled: isSnapEnabled)
             } else {
                 KanbanView(board: board)
             }
@@ -49,6 +50,16 @@ struct BoardDetailView: View {
                         addCardAtViewportCenter()
                     } label: {
                         Label("Add Card", systemImage: "plus")
+                    }
+                }
+            }
+
+            ToolbarItem {
+                if surfaceMode == .canvas {
+                    Button {
+                        isSnapEnabled.toggle()
+                    } label: {
+                        Label("Snap", systemImage: isSnapEnabled ? "square.grid.3x3.fill" : "square.grid.3x3")
                     }
                 }
             }

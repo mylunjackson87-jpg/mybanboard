@@ -161,7 +161,7 @@ struct CanvasView: View {
 
     private var canvasCards: [Card] {
         board.cards
-            .filter { $0.kanbanColumn == nil }
+            .filter { $0.kanbanColumn == nil && $0.deletedAt == nil }
             .sorted { $0.title.localizedCompare($1.title) == .orderedAscending }
     }
 
@@ -466,30 +466,24 @@ struct CanvasView: View {
     }
 
     private func deleteCard(_ card: Card) {
-        let snapshot = CardSnapshot(card: card)
+        card.deletedAt = .now
+        card.board.updatedAt = .now
         selectedCardIDs.remove(card.id)
-        modelContext.delete(card)
-        board.updatedAt = .now
-        modelContext.saveWithLogging("CanvasView.deleteCard")
-        undoService?.registerCardDeleted(snapshot)
+        modelContext.saveWithLogging("CanvasView.softDeleteCard")
     }
 
     private func deleteSelectedCards() {
         let cardsToDelete = canvasCards.filter { selectedCardIDs.contains($0.id) }
         guard !cardsToDelete.isEmpty else { return }
 
-        let snapshots = cardsToDelete.map(CardSnapshot.init(card:))
+        let deletedAt = Date.now
         for card in cardsToDelete {
-            modelContext.delete(card)
+            card.deletedAt = deletedAt
+            card.board.updatedAt = deletedAt
         }
 
         selectedCardIDs.removeAll()
-        board.updatedAt = .now
-        modelContext.saveWithLogging("CanvasView.deleteSelectedCards")
-
-        for snapshot in snapshots {
-            undoService?.registerCardDeleted(snapshot)
-        }
+        modelContext.saveWithLogging("CanvasView.softDeleteSelectedCards")
     }
 
     private func registerCardFrameChange(cardID: UUID, before: CardFrameSnapshot, after: CardFrameSnapshot) {

@@ -13,6 +13,7 @@ final class Board {
     @Attribute(.unique) var id: UUID
     var title: String
     var updatedAt: Date
+    var deletedAt: Date?
     var viewportOffsetX: Double
     var viewportOffsetY: Double
     var viewportScale: Double
@@ -24,6 +25,7 @@ final class Board {
         id: UUID = UUID(),
         title: String,
         updatedAt: Date = .now,
+        deletedAt: Date? = nil,
         viewportOffsetX: Double = 0,
         viewportOffsetY: Double = 0,
         viewportScale: Double = 1,
@@ -32,6 +34,7 @@ final class Board {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
         self.viewportOffsetX = viewportOffsetX
         self.viewportOffsetY = viewportOffsetY
         self.viewportScale = viewportScale

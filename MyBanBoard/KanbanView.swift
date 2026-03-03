@@ -57,7 +57,7 @@ struct KanbanView: View {
 
     private func cards(in column: Column) -> [Card] {
         board.cards
-            .filter { $0.kanbanColumn?.id == column.id }
+            .filter { $0.kanbanColumn?.id == column.id && $0.deletedAt == nil }
             .sorted { $0.orderInColumn < $1.orderInColumn }
     }
 

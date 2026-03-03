@@ -14,6 +14,7 @@ final class Card {
     var board: Board
     var title: String
     var content: String
+    var deletedAt: Date?
     var x: Double
     var y: Double
     var width: Double
@@ -26,6 +27,7 @@ final class Card {
         board: Board,
         title: String,
         content: String = "",
+        deletedAt: Date? = nil,
         x: Double = 0,
         y: Double = 0,
         width: Double = 260,
@@ -37,6 +39,7 @@ final class Card {
         self.board = board
         self.title = title
         self.content = content
+        self.deletedAt = deletedAt
         self.x = x
         self.y = y
         self.width = width

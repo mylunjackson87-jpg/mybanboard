@@ -144,7 +144,9 @@ struct BoardDetailView: View {
     }
 
     private var cards: [Card] {
-        board.cards.sorted { $0.title.localizedCompare($1.title) == .orderedAscending }
+        board.cards
+            .filter { $0.deletedAt == nil }
+            .sorted { $0.title.localizedCompare($1.title) == .orderedAscending }
     }
 
     private var columns: [Column] {
@@ -182,15 +184,20 @@ struct BoardDetailView: View {
     }
 
     private func deleteCards(offsets: IndexSet) {
-        let deletedSnapshots = offsets.map { CardSnapshot(card: cards[$0]) }
-        for index in offsets {
-            modelContext.delete(cards[index])
+        let targetCards = offsets.map { cards[$0] }
+        let affectedColumnIDs = Set(targetCards.compactMap { $0.kanbanColumn?.id })
+        let deletedAt = Date.now
+
+        for card in targetCards {
+            card.deletedAt = deletedAt
         }
-        board.updatedAt = .now
-        modelContext.saveWithLogging("BoardDetailView.deleteCards")
-        for snapshot in deletedSnapshots {
-            undoService?.registerCardDeleted(snapshot)
+
+        for columnID in affectedColumnIDs {
+            normalizeKanbanOrder(columnID: columnID)
         }
+
+        board.updatedAt = deletedAt
+        modelContext.saveWithLogging("BoardDetailView.softDeleteCards")
     }
 
     private func addColumn() {
@@ -239,6 +246,16 @@ struct BoardDetailView: View {
         jumpToCardID = nil
         DispatchQueue.main.async {
             jumpToCardID = card.id
+        }
+    }
+
+    private func normalizeKanbanOrder(columnID: UUID) {
+        let columnCards = board.cards
+            .filter { $0.deletedAt == nil && $0.kanbanColumn?.id == columnID }
+            .sorted { $0.orderInColumn < $1.orderInColumn }
+
+        for (index, card) in columnCards.enumerated() {
+            card.orderInColumn = index
         }
     }
 }

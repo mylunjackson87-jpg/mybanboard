@@ -11,7 +11,14 @@ import SwiftData
 import UIKit
 #elseif os(macOS)
 import AppKit
+import CoreGraphics
 #endif
+
+private enum CanvasPointerMode {
+    case idle
+    case panning
+    case lasso
+}
 
 struct CanvasView: View {
     @Environment(\.modelContext) private var modelContext
@@ -21,6 +28,17 @@ struct CanvasView: View {
 
     @State private var dragTranslation: CGSize = .zero
     @State private var pinchScale: CGFloat = 1
+
+    @State private var selectedCardIDs = Set<UUID>()
+    @State private var groupDragCardIDs = Set<UUID>()
+    @State private var groupDragTranslation: CGSize = .zero
+
+    @State private var pointerMode: CanvasPointerMode = .idle
+    @State private var lassoStartPoint: CGPoint?
+    @State private var lassoCurrentPoint: CGPoint?
+    @State private var lassoBaseSelection = Set<UUID>()
+
+    @State private var showDeleteSelectionConfirmation = false
 
     private let surfaceSize: CGFloat = 5000
 
@@ -47,8 +65,15 @@ struct CanvasView: View {
                         CanvasCardView(
                             card: card,
                             zoomScale: effectiveScale,
+                            isSelected: selectedCardIDs.contains(card.id),
+                            groupDragOffset: groupDragOffset(for: card.id),
+                            usesGroupDrag: selectedCardIDs.count > 1 && selectedCardIDs.contains(card.id),
+                            onSelect: { selectCard(card.id) },
+                            onToggleSelection: { toggleCardSelection(card.id) },
                             onFrameCommit: registerCardFrameChange,
                             onTextCommit: registerCardTextChange,
+                            onGroupMoveChanged: handleGroupMoveChanged,
+                            onGroupMoveEnded: handleGroupMoveEnded,
                             onDelete: { deleteCard(card) },
                             onSendToKanban: { sendCardToKanban(card) }
                         )
@@ -61,10 +86,35 @@ struct CanvasView: View {
                 .frame(width: surfaceSize, height: surfaceSize)
                 .scaleEffect(effectiveScale, anchor: .center)
                 .offset(x: effectiveOffset.width, y: effectiveOffset.height)
+
+                if let lassoRect {
+                    Rectangle()
+                        .fill(Color.accentColor.opacity(0.12))
+                        .overlay {
+                            Rectangle()
+                                .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .frame(width: lassoRect.width, height: lassoRect.height)
+                        .position(x: lassoRect.midX, y: lassoRect.midY)
+                        .allowsHitTesting(false)
+                }
             }
             .contentShape(Rectangle())
             .gesture(panGesture)
             .simultaneousGesture(zoomGesture)
+#if os(iOS)
+            .simultaneousGesture(iPadLassoGesture)
+#endif
+            .alert(deleteSelectionTitle, isPresented: $showDeleteSelectionConfirmation) {
+                Button("Delete", role: .destructive) {
+                    deleteSelectedCards()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This action cannot be undone from the deletion prompt. You can still use Undo after deletion.")
+            }
+            .background(deleteSelectionShortcutButton)
             .overlay(alignment: .topTrailing) {
                 Text("Zoom \(Int(effectiveScale * 100))%")
                     .font(.caption)
@@ -75,6 +125,7 @@ struct CanvasView: View {
             }
             .onDisappear {
                 saveViewport()
+                clearTransientInteractionState(keepSelection: false)
             }
             .animation(.interactiveSpring(response: 0.2, dampingFraction: 0.85), value: dragTranslation)
             .onTapGesture(count: 2) {
@@ -85,6 +136,7 @@ struct CanvasView: View {
                     pinchScale = 1
                     dragTranslation = .zero
                 }
+                clearTransientInteractionState(keepSelection: true)
                 modelContext.saveWithLogging("CanvasView.resetViewport")
             }
             .overlay(alignment: .bottomTrailing) {
@@ -118,18 +170,91 @@ struct CanvasView: View {
         )
     }
 
+    private var lassoRect: CGRect? {
+        guard let lassoStartPoint, let lassoCurrentPoint else { return nil }
+        return CGRect(
+            x: min(lassoStartPoint.x, lassoCurrentPoint.x),
+            y: min(lassoStartPoint.y, lassoCurrentPoint.y),
+            width: abs(lassoCurrentPoint.x - lassoStartPoint.x),
+            height: abs(lassoCurrentPoint.y - lassoStartPoint.y)
+        )
+    }
+
+    private var deleteSelectionTitle: String {
+        let suffix = selectedCardIDs.count == 1 ? "" : "s"
+        return "Delete \(selectedCardIDs.count) Selected Card\(suffix)?"
+    }
+
+    private var deleteSelectionShortcutButton: some View {
+        Button("Delete Selected") {
+            guard !selectedCardIDs.isEmpty else { return }
+            showDeleteSelectionConfirmation = true
+        }
+        .keyboardShortcut(.delete, modifiers: [])
+        .disabled(selectedCardIDs.isEmpty)
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     private var panGesture: some Gesture {
-        DragGesture()
+        DragGesture(minimumDistance: 4)
             .onChanged { value in
+                if pointerMode == .lasso {
+                    updateLassoSelection(current: value.location, additive: true)
+                    return
+                }
+
+                if shouldStartMacLasso(from: value.startLocation) {
+                    if pointerMode != .lasso {
+                        beginLasso(at: value.startLocation, additive: true)
+                    }
+                    updateLassoSelection(current: value.location, additive: true)
+                    return
+                }
+
+                pointerMode = .panning
                 dragTranslation = value.translation
             }
             .onEnded { value in
-                board.viewportOffsetX += value.translation.width
-                board.viewportOffsetY += value.translation.height
-                dragTranslation = .zero
-                saveViewport()
+                if pointerMode == .lasso {
+                    finishLasso()
+                    return
+                }
+
+                if pointerMode == .panning {
+                    board.viewportOffsetX += value.translation.width
+                    board.viewportOffsetY += value.translation.height
+                    dragTranslation = .zero
+                    pointerMode = .idle
+                    saveViewport()
+                } else {
+                    dragTranslation = .zero
+                }
             }
     }
+
+#if os(iOS)
+    private var iPadLassoGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.35)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .onChanged { value in
+                guard case .second(true, let dragValue?) = value else { return }
+                guard !isPointOverCard(dragValue.startLocation) else { return }
+
+                if pointerMode != .lasso {
+                    beginLasso(at: dragValue.startLocation, additive: false)
+                }
+                updateLassoSelection(current: dragValue.location, additive: false)
+            }
+            .onEnded { _ in
+                if pointerMode == .lasso {
+                    finishLasso()
+                }
+            }
+    }
+#endif
 
     private var zoomGesture: some Gesture {
         MagnifyGesture()
@@ -139,6 +264,7 @@ struct CanvasView: View {
             .onEnded { value in
                 board.viewportScale = max(0.5, min(2.5, board.viewportScale * value.magnification))
                 pinchScale = 1
+                clearTransientInteractionState(keepSelection: true)
                 saveViewport()
             }
     }
@@ -158,6 +284,143 @@ struct CanvasView: View {
         modelContext.saveWithLogging("CanvasView.saveDrawing")
     }
 
+    private func groupDragOffset(for cardID: UUID) -> CGSize {
+        groupDragCardIDs.contains(cardID) ? groupDragTranslation : .zero
+    }
+
+    private func selectCard(_ cardID: UUID) {
+#if os(macOS)
+        if isShiftSelectionModifierActive {
+            toggleCardSelection(cardID)
+            return
+        }
+#endif
+        selectedCardIDs = [cardID]
+    }
+
+    private func toggleCardSelection(_ cardID: UUID) {
+        if selectedCardIDs.contains(cardID) {
+            selectedCardIDs.remove(cardID)
+        } else {
+            selectedCardIDs.insert(cardID)
+        }
+    }
+
+    private func shouldStartMacLasso(from startLocation: CGPoint) -> Bool {
+#if os(macOS)
+        isShiftSelectionModifierActive && !isPointOverCard(startLocation)
+#else
+        false
+#endif
+    }
+
+#if os(macOS)
+    private var isShiftSelectionModifierActive: Bool {
+        CGEventSource.flagsState(.combinedSessionState).contains(.maskShift)
+    }
+#endif
+
+    private func beginLasso(at start: CGPoint, additive: Bool) {
+        pointerMode = .lasso
+        lassoStartPoint = start
+        lassoCurrentPoint = start
+        lassoBaseSelection = additive ? selectedCardIDs : []
+        if !additive {
+            selectedCardIDs.removeAll()
+        }
+        dragTranslation = .zero
+    }
+
+    private func updateLassoSelection(current: CGPoint, additive: Bool) {
+        lassoCurrentPoint = current
+        guard let lassoRect else { return }
+
+        let hitIDs = Set(
+            canvasCards
+                .filter { lassoRect.intersects(cardFrameInViewport($0)) }
+                .map(\.id)
+        )
+
+        if additive {
+            selectedCardIDs = lassoBaseSelection.union(hitIDs)
+        } else {
+            selectedCardIDs = hitIDs
+        }
+    }
+
+    private func finishLasso() {
+        pointerMode = .idle
+        lassoStartPoint = nil
+        lassoCurrentPoint = nil
+        lassoBaseSelection.removeAll()
+        dragTranslation = .zero
+    }
+
+    private func clearTransientInteractionState(keepSelection: Bool) {
+        pointerMode = .idle
+        lassoStartPoint = nil
+        lassoCurrentPoint = nil
+        lassoBaseSelection.removeAll()
+        groupDragCardIDs.removeAll()
+        groupDragTranslation = .zero
+        dragTranslation = .zero
+        if !keepSelection {
+            selectedCardIDs.removeAll()
+        }
+    }
+
+    private func isPointOverCard(_ point: CGPoint) -> Bool {
+        canvasCards.contains { cardFrameInViewport($0).contains(point) }
+    }
+
+    private func cardFrameInViewport(_ card: Card) -> CGRect {
+        let width = CGFloat(card.width) * effectiveScale
+        let height = CGFloat(card.height) * effectiveScale
+        let centerX = (surfaceSize / 2 + CGFloat(card.x)) * effectiveScale + effectiveOffset.width
+        let centerY = (surfaceSize / 2 + CGFloat(card.y)) * effectiveScale + effectiveOffset.height
+
+        return CGRect(
+            x: centerX - (width / 2),
+            y: centerY - (height / 2),
+            width: width,
+            height: height
+        )
+    }
+
+    private func handleGroupMoveChanged(cardID: UUID, translation: CGSize) {
+        guard selectedCardIDs.count > 1, selectedCardIDs.contains(cardID) else { return }
+        if groupDragCardIDs.isEmpty {
+            groupDragCardIDs = selectedCardIDs
+        }
+        groupDragTranslation = translation
+    }
+
+    private func handleGroupMoveEnded(cardID: UUID, translation: CGSize) {
+        guard selectedCardIDs.count > 1, selectedCardIDs.contains(cardID) else { return }
+        let movingIDs = groupDragCardIDs.isEmpty ? selectedCardIDs : groupDragCardIDs
+        guard !movingIDs.isEmpty else { return }
+
+        let scale = max(effectiveScale, 0.5)
+        let deltaX = Double(translation.width / scale)
+        let deltaY = Double(translation.height / scale)
+
+        var changes: [CardFrameChange] = []
+        for card in canvasCards where movingIDs.contains(card.id) {
+            let before = CardFrameSnapshot(x: card.x, y: card.y, width: card.width, height: card.height)
+            card.x += deltaX
+            card.y += deltaY
+            let after = CardFrameSnapshot(x: card.x, y: card.y, width: card.width, height: card.height)
+            changes.append(CardFrameChange(cardID: card.id, from: before, to: after))
+        }
+
+        groupDragCardIDs.removeAll()
+        groupDragTranslation = .zero
+
+        guard !changes.isEmpty else { return }
+        saveCardMutation()
+        undoService?.registerCardFrameBatchChange(actionName: "Move Cards", changes: changes)
+    }
+
     private func sendCardToKanban(_ card: Card) {
         let beforeOrder = board.cards.map(CardOrderSnapshot.init(card:))
         let column: Column
@@ -172,6 +435,7 @@ struct CanvasView: View {
         let existing = board.cards.filter { $0.kanbanColumn?.id == column.id }
         card.kanbanColumn = column
         card.orderInColumn = existing.count
+        selectedCardIDs.remove(card.id)
         board.updatedAt = .now
         modelContext.saveWithLogging("CanvasView.sendCardToKanban")
         let afterOrder = board.cards.map(CardOrderSnapshot.init(card:))
@@ -185,10 +449,29 @@ struct CanvasView: View {
 
     private func deleteCard(_ card: Card) {
         let snapshot = CardSnapshot(card: card)
+        selectedCardIDs.remove(card.id)
         modelContext.delete(card)
         board.updatedAt = .now
         modelContext.saveWithLogging("CanvasView.deleteCard")
         undoService?.registerCardDeleted(snapshot)
+    }
+
+    private func deleteSelectedCards() {
+        let cardsToDelete = canvasCards.filter { selectedCardIDs.contains($0.id) }
+        guard !cardsToDelete.isEmpty else { return }
+
+        let snapshots = cardsToDelete.map(CardSnapshot.init(card:))
+        for card in cardsToDelete {
+            modelContext.delete(card)
+        }
+
+        selectedCardIDs.removeAll()
+        board.updatedAt = .now
+        modelContext.saveWithLogging("CanvasView.deleteSelectedCards")
+
+        for snapshot in snapshots {
+            undoService?.registerCardDeleted(snapshot)
+        }
     }
 
     private func registerCardFrameChange(cardID: UUID, before: CardFrameSnapshot, after: CardFrameSnapshot) {
@@ -209,8 +492,15 @@ struct CanvasView: View {
 private struct CanvasCardView: View {
     @Bindable var card: Card
     let zoomScale: CGFloat
+    let isSelected: Bool
+    let groupDragOffset: CGSize
+    let usesGroupDrag: Bool
+    let onSelect: () -> Void
+    let onToggleSelection: () -> Void
     let onFrameCommit: (UUID, CardFrameSnapshot, CardFrameSnapshot) -> Void
     let onTextCommit: (UUID, CardTextSnapshot, CardTextSnapshot) -> Void
+    let onGroupMoveChanged: (UUID, CGSize) -> Void
+    let onGroupMoveEnded: (UUID, CGSize) -> Void
     let onDelete: () -> Void
     let onSendToKanban: () -> Void
 
@@ -239,6 +529,10 @@ private struct CanvasCardView: View {
         .padding(12)
         .frame(width: effectiveWidth, height: effectiveHeight, alignment: .topLeading)
         .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+        }
         .overlay(alignment: .bottomTrailing) {
             Circle()
                 .fill(.tint)
@@ -247,12 +541,26 @@ private struct CanvasCardView: View {
                 .gesture(resizeGesture)
         }
         .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
-        .offset(dragTranslation)
+        .offset(
+            x: dragTranslation.width + groupDragOffset.width,
+            y: dragTranslation.height + groupDragOffset.height
+        )
         .gesture(moveGesture)
+        .onTapGesture {
+            onSelect()
+        }
         .contextMenu {
             Button("Send to Kanban", action: onSendToKanban)
             Button("Delete Card", role: .destructive, action: onDelete)
         }
+#if os(iOS)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.35)
+                .onEnded { _ in
+                    onToggleSelection()
+                }
+        )
+#endif
         .onChange(of: card.title) { oldValue, _ in
             beginTextSessionIfNeeded(previousTitle: oldValue, previousContent: card.content)
             scheduleTextCommit()
@@ -277,12 +585,23 @@ private struct CanvasCardView: View {
     private var moveGesture: some Gesture {
         DragGesture()
             .onChanged { value in
-                if gestureStartFrame == nil {
-                    gestureStartFrame = currentFrameSnapshot
+                if usesGroupDrag {
+                    onGroupMoveChanged(card.id, value.translation)
+                } else {
+                    if gestureStartFrame == nil {
+                        gestureStartFrame = currentFrameSnapshot
+                    }
+                    dragTranslation = value.translation
                 }
-                dragTranslation = value.translation
             }
             .onEnded { value in
+                if usesGroupDrag {
+                    onGroupMoveEnded(card.id, value.translation)
+                    dragTranslation = .zero
+                    gestureStartFrame = nil
+                    return
+                }
+
                 card.x += value.translation.width / max(zoomScale, 0.5)
                 card.y += value.translation.height / max(zoomScale, 0.5)
                 dragTranslation = .zero
@@ -301,7 +620,7 @@ private struct CanvasCardView: View {
                 }
                 resizeTranslation = value.translation
             }
-            .onEnded { value in
+            .onEnded { _ in
                 card.width = Double(effectiveWidth)
                 card.height = Double(effectiveHeight)
                 resizeTranslation = .zero

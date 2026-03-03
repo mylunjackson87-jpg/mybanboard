@@ -13,6 +13,12 @@ struct CardTextSnapshot {
     let content: String
 }
 
+struct CardFrameChange {
+    let cardID: UUID
+    let from: CardFrameSnapshot
+    let to: CardFrameSnapshot
+}
+
 struct CardSnapshot {
     let id: UUID
     let boardID: UUID
@@ -80,6 +86,15 @@ final class UndoService {
             self?.applyCardFrame(cardID: cardID, snapshot: from)
         }, redo: { [weak self] in
             self?.applyCardFrame(cardID: cardID, snapshot: to)
+        })
+    }
+
+    func registerCardFrameBatchChange(actionName: String, changes: [CardFrameChange]) {
+        guard !changes.isEmpty else { return }
+        register(actionName: actionName, undo: { [weak self] in
+            self?.applyCardFrameChanges(changes, useToSnapshot: false, source: "UndoService.undo\(actionName)")
+        }, redo: { [weak self] in
+            self?.applyCardFrameChanges(changes, useToSnapshot: true, source: "UndoService.redo\(actionName)")
         })
     }
 
@@ -160,6 +175,26 @@ final class UndoService {
         card.height = snapshot.height
         card.board.updatedAt = .now
         modelContext.saveWithLogging("UndoService.applyCardFrame")
+    }
+
+    private func applyCardFrameChanges(_ changes: [CardFrameChange], useToSnapshot: Bool, source: String) {
+        var touchedBoardIDs = Set<UUID>()
+
+        for change in changes {
+            guard let card = fetchCard(id: change.cardID) else { continue }
+            let snapshot = useToSnapshot ? change.to : change.from
+            card.x = snapshot.x
+            card.y = snapshot.y
+            card.width = snapshot.width
+            card.height = snapshot.height
+            touchedBoardIDs.insert(card.board.id)
+        }
+
+        for boardID in touchedBoardIDs {
+            fetchBoard(id: boardID)?.updatedAt = .now
+        }
+
+        modelContext.saveWithLogging(source)
     }
 
     private func applyCardText(cardID: UUID, snapshot: CardTextSnapshot) {
